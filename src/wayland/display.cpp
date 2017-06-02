@@ -31,6 +31,7 @@
 #endif
 #include "xdg-shell-client-protocol.h"
 #include "wayland-client-protocol.h"
+#include <wayland-client.h>
 #include <cassert>
 #include <cstring>
 #include <glib.h>
@@ -48,29 +49,27 @@ namespace Wayland {
 
 class EventSource {
 public:
-    static GSourceFuncs sourceFuncs;
-
-    GSource source;
-    GPollFD pfd;
-    struct wl_display* display;
+    static GSourceFuncs         sourceFuncs;
+    GSource                     source;
+    GPollFD                     pfd;
+    struct wl_display*          display;
+    struct wl_event_queue*      queue;
 };
+
 
 GSourceFuncs EventSource::sourceFuncs = {
     // prepare
     [](GSource* base, gint* timeout) -> gboolean
     {
-        auto* source = reinterpret_cast<EventSource*>(base);
+        auto* source = reinterpret_cast<EventSource*>( base );
         struct wl_display* display = source->display;
+        struct wl_event_queue* queue = source->queue;
 
-        *timeout = -1;
+        *timeout = 100;
+        source->pfd.revents = 0;
 
-        while (wl_display_prepare_read(display) != 0) {
-            if (wl_display_dispatch_pending(display) < 0) {
-                fprintf(stderr, "Wayland::Display: error in wayland prepare\n");
-                return FALSE;
-            }
-        }
-        wl_display_flush(display);
+        wl_display_dispatch_queue_pending( display, queue );
+        wl_display_flush( display );
 
         return FALSE;
     },
@@ -78,34 +77,30 @@ GSourceFuncs EventSource::sourceFuncs = {
     [](GSource* base) -> gboolean
     {
         auto* source = reinterpret_cast<EventSource*>(base);
-        struct wl_display* display = source->display;
 
-        if (source->pfd.revents & G_IO_IN) {
-            if (wl_display_read_events(display) < 0) {
-                fprintf(stderr, "Wayland::Display: error in wayland read\n");
-                return FALSE;
-            }
+        if ( source->pfd.revents != 0 )
             return TRUE;
-        } else {
-            wl_display_cancel_read(display);
-            return FALSE;
-        }
+
+        return FALSE;
     },
     // dispatch
     [](GSource* base, GSourceFunc, gpointer) -> gboolean
     {
         auto* source = reinterpret_cast<EventSource*>(base);
         struct wl_display* display = source->display;
+        struct wl_event_queue* queue = source->queue;
 
-        if (source->pfd.revents & G_IO_IN) {
-            if (wl_display_dispatch_pending(display) < 0) {
-                fprintf(stderr, "Wayland::Display: error in wayland dispatch\n");
-                return G_SOURCE_REMOVE;
-            }
+        if ( source->pfd.revents & G_IO_IN )
+        {
+            while ( wl_display_prepare_read_queue( display, queue ) != 0)
+                wl_display_dispatch_queue_pending( display, queue );
+
+            wl_display_read_events( display );
         }
-
         if (source->pfd.revents & (G_IO_ERR | G_IO_HUP))
             return G_SOURCE_REMOVE;
+
+        wl_display_dispatch_queue_pending( display, queue );
 
         source->pfd.revents = 0;
         return G_SOURCE_CONTINUE;
@@ -133,7 +128,7 @@ const struct wl_registry_listener g_registryListener = {
             interfaces.seat = static_cast<struct wl_seat*>(wl_registry_bind(registry, name, &wl_seat_interface, 4));
 
         if (!std::strcmp(interface, "xdg_shell"))
-            interfaces.xdg = static_cast<struct xdg_shell*>(wl_registry_bind(registry, name, &xdg_shell_interface, 1)); 
+            interfaces.xdg = static_cast<struct xdg_shell*>(wl_registry_bind(registry, name, &xdg_shell_interface, 1));
 
         if (!std::strcmp(interface, "wl_shell"))
             interfaces.shell = static_cast<struct wl_shell*>(wl_registry_bind(registry, name, &wl_shell_interface, 1));
@@ -470,38 +465,47 @@ static const struct wl_seat_listener g_seatListener = {
 
         // WL_SEAT_CAPABILITY_POINTER
         const bool hasPointerCap = capabilities & WL_SEAT_CAPABILITY_POINTER;
-        if (hasPointerCap && !seatData.pointer.object) {
+        if (hasPointerCap && !seatData.pointer.object)
+        {
             seatData.pointer.object = wl_seat_get_pointer(seat);
+            wl_proxy_set_queue((struct wl_proxy *) seatData.pointer.object, seatData.queue );
             wl_pointer_add_listener(seatData.pointer.object, &g_pointerListener, &seatData);
         }
-        if (!hasPointerCap && seatData.pointer.object) {
+        if (!hasPointerCap && seatData.pointer.object)
+        {
             wl_pointer_destroy(seatData.pointer.object);
             seatData.pointer.object = nullptr;
         }
 
         // WL_SEAT_CAPABILITY_KEYBOARD
         const bool hasKeyboardCap = capabilities & WL_SEAT_CAPABILITY_KEYBOARD;
-        if (hasKeyboardCap && !seatData.keyboard.object) {
+        if (hasKeyboardCap && !seatData.keyboard.object)
+        {
             seatData.keyboard.object = wl_seat_get_keyboard(seat);
+            wl_proxy_set_queue((struct wl_proxy *) seatData.keyboard.object, seatData.queue );
             wl_keyboard_add_listener(seatData.keyboard.object, &g_keyboardListener, &seatData);
         }
-        if (!hasKeyboardCap && seatData.keyboard.object) {
+        if (!hasKeyboardCap && seatData.keyboard.object)
+        {
             wl_keyboard_destroy(seatData.keyboard.object);
             seatData.keyboard.object = nullptr;
         }
 
         // WL_SEAT_CAPABILITY_TOUCH
         const bool hasTouchCap = capabilities & WL_SEAT_CAPABILITY_TOUCH;
-        if (hasTouchCap && !seatData.touch.object) {
+        if (hasTouchCap && !seatData.touch.object)
+        {
             seatData.touch.object = wl_seat_get_touch(seat);
+            wl_proxy_set_queue((struct wl_proxy *) seatData.touch.object, seatData.queue );
             wl_touch_add_listener(seatData.touch.object, &g_touchListener, &seatData);
         }
-        if (!hasTouchCap && seatData.touch.object) {
+        if (!hasTouchCap && seatData.touch.object)
+        {
             wl_touch_destroy(seatData.touch.object);
             seatData.touch.object = nullptr;
         }
     },
-    // name
+    // namedest
     [](void*, struct wl_seat*, const char*) { }
 };
 
@@ -521,13 +525,20 @@ Display::Display()
         abort();
     }
 
-    m_registry = wl_display_get_registry(m_display);
-    wl_registry_add_listener(m_registry, &g_registryListener, &m_interfaces);
-    wl_display_roundtrip(m_display);
+    m_seatData.queue = wl_display_create_queue( m_display );
+
+    m_display_wrapper = (struct wl_display *) wl_proxy_create_wrapper( m_display );
+    wl_proxy_set_queue( (struct wl_proxy *) m_display_wrapper, m_seatData.queue );
+
+    m_registry = wl_display_get_registry( m_display_wrapper );
+    wl_registry_add_listener( m_registry, &g_registryListener, &m_interfaces );
+
+    wl_display_roundtrip_queue(m_display, m_seatData.queue);
+
     m_eventSource = g_source_new(&EventSource::sourceFuncs, sizeof(EventSource));
     auto* source = reinterpret_cast<EventSource*>(m_eventSource);
     source->display = m_display;
-
+    source->queue = m_seatData.queue;
     source->pfd.fd = wl_display_get_fd(m_display);
     source->pfd.events = G_IO_IN | G_IO_ERR | G_IO_HUP;
     source->pfd.revents = 0;
@@ -542,7 +553,11 @@ Display::Display()
     }
 
     if ( m_interfaces.seat )
-        wl_seat_add_listener(m_interfaces.seat, &g_seatListener, &m_seatData);
+    {
+        wl_seat_add_listener( m_interfaces.seat, &g_seatListener, &m_seatData );
+        m_interfaces.seat_wrapper =(struct wl_seat *) wl_proxy_create_wrapper( m_interfaces.seat );
+        wl_proxy_set_queue( (struct wl_proxy *) m_interfaces.seat_wrapper, m_seatData.queue );
+    }
 
     m_seatData.xkb.context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     m_seatData.xkb.composeTable = xkb_compose_table_new_from_locale(m_seatData.xkb.context, setlocale(LC_CTYPE, nullptr), XKB_COMPOSE_COMPILE_NO_FLAGS);
@@ -584,7 +599,8 @@ Display::~Display()
     if (m_display)
         wl_display_disconnect(m_display);
     m_display = nullptr;
-
+    if ( m_seatData.queue )
+        wl_event_queue_destroy( m_seatData.queue );
     if (m_seatData.pointer.object)
         wl_pointer_destroy(m_seatData.pointer.object);
     if (m_seatData.keyboard.object)
