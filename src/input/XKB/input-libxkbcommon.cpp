@@ -209,6 +209,9 @@ struct wpe_input_key_mapper_interface libxkbcommon_input_key_mapper_interface = 
             case XKB_KEY_XF86Subtitle:
                 return "Subtitle";
 
+            case 0x010023ef:
+		return "MediaPlayPause";
+
             default:
                 return nullptr;
         }
@@ -623,6 +626,9 @@ struct wpe_input_key_mapper_interface libxkbcommon_input_key_mapper_interface = 
                 return VK_HAVI_SUBTITLE;
             case XKB_KEY_XF86Video:
                 return VK_OCAP_ON_DEMAND;
+
+            case 0x010023ef:
+                return VK_MEDIA_PLAY_PAUSE;
 
             default:
                 return 0;
