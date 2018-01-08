@@ -44,6 +44,7 @@
 #include <wayland-client.h>
 #include <wpe/input.h>
 #include <wpe/view-backend.h>
+#include <vector>
 
 namespace Wayland {
 
@@ -236,6 +237,11 @@ handleKeyEvent(Display::SeatData& seatData, uint32_t key, uint32_t state, uint32
         keysym = xkb_compose_state_get_one_sym(xkb.composeState);
         unicode = xkb_keysym_to_utf32(keysym);
     }
+    // YTLB Criteria: 9.1 Device remote keys not implemented by the application or reserved for device system functions MUST NOT dispatch any key event or key code.
+    static std::vector<uint32_t> unsupportedKeysyms = { XKB_KEY_0, XKB_KEY_1, XKB_KEY_2, XKB_KEY_3, XKB_KEY_4, XKB_KEY_5, XKB_KEY_6, XKB_KEY_7, XKB_KEY_8, XKB_KEY_9, XKB_KEY_XF86AudioRecord, XKB_KEY_XF86Tools };
+    for (const auto& key : unsupportedKeysyms)
+        if ( keysym == key )
+            return;
 
     struct wpe_input_keyboard_event event = { time, keysym, unicode, !!state, xkb.modifiers };
     EventDispatcher::singleton().sendEvent( event );
