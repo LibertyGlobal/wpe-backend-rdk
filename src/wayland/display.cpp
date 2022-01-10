@@ -168,6 +168,11 @@ static const struct wl_pointer_listener g_pointerListener = {
         auto it = seatData.inputClients.find(surface);
         if (it != seatData.inputClients.end() && seatData.pointer.target.first == it->first)
             seatData.pointer.target = { nullptr, nullptr };
+
+        if (seatData.repeatData.key && seatData.repeatData.eventSource) {
+            g_source_remove(seatData.repeatData.eventSource);
+            seatData.repeatData = { 0, 0, 0, 0 };
+        }
     },
     // motion
     [](void* data, struct wl_pointer*, uint32_t time, wl_fixed_t fixedX, wl_fixed_t fixedY)
